@@ -1,0 +1,270 @@
+import { Injectable, Logger } from '@nestjs/common';
+
+import { MessageParticipantRole } from 'twenty-shared/types';
+import { isDefined } from 'twenty-shared/utils';
+
+import { GlobalWorkspaceOrmManager } from 'src/engine/twenty-orm/global-workspace-datasource/global-workspace-orm.manager';
+import { buildSystemAuthContext } from 'src/engine/twenty-orm/utils/build-system-auth-context.util';
+import { KLIENT_OBJECT_NAME } from 'src/modules/custom/order-email-processor/order-email-processor.constants';
+import {
+  extractFirstPhone,
+  extractFirstUrl,
+  pickClientName,
+  subjectMentionsOrder,
+} from 'src/modules/custom/order-email-processor/utils/parse-email-content.util';
+import { type MessageWithParticipants } from 'src/modules/messaging/message-import-manager/types/message';
+import { NoteWorkspaceEntity } from 'src/modules/note/standard-objects/note.workspace-entity';
+import { NoteTargetWorkspaceEntity } from 'src/modules/note/standard-objects/note-target.workspace-entity';
+
+type Klient = {
+  id: string;
+  name: string | null;
+  emaylPrimaryEmail: string | null;
+  telefonPrimaryPhoneNumber: string | null;
+  ssylkiPrimaryLinkUrl: string | null;
+  primechanie: string | null;
+};
+
+type ExtractedFields = {
+  email: string;
+  name: string;
+  phone: string | null;
+  websiteUrl: string | null;
+};
+
+@Injectable()
+export class OrderEmailProcessorService {
+  private readonly logger = new Logger(OrderEmailProcessorService.name);
+
+  constructor(
+    private readonly globalWorkspaceOrmManager: GlobalWorkspaceOrmManager,
+  ) {}
+
+  async processMessages(
+    messages: MessageWithParticipants[],
+    workspaceId: string,
+  ): Promise<void> {
+    const matchingMessages = messages.filter((message) =>
+      subjectMentionsOrder(message.subject),
+    );
+
+    if (matchingMessages.length === 0) return;
+
+    const authContext = buildSystemAuthContext(workspaceId);
+
+    await this.globalWorkspaceOrmManager.executeInWorkspaceContext(async () => {
+      for (const message of matchingMessages) {
+        try {
+          await this.processSingleMessage(message, workspaceId);
+        } catch (error) {
+          this.logger.error(
+            `Failed to process order email "${message.subject}": ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+    }, authContext);
+  }
+
+  private async processSingleMessage(
+    message: MessageWithParticipants,
+    workspaceId: string,
+  ): Promise<void> {
+    const sender = message.participants.find(
+      (p) => p.role === MessageParticipantRole.FROM,
+    );
+
+    if (!sender?.handle) {
+      this.logger.warn(
+        `Skipping order email "${message.subject}": no FROM participant.`,
+      );
+
+      return;
+    }
+
+    const email = sender.handle.trim().toLowerCase();
+    const fields: ExtractedFields = {
+      email,
+      name: pickClientName({
+        body: message.text,
+        displayName: sender.displayName,
+        email,
+      }),
+      phone: extractFirstPhone(message.text),
+      websiteUrl: extractFirstUrl(message.text),
+    };
+
+    const klient = await this.findOrCreateKlient(fields, message, workspaceId);
+
+    await this.attachNote(klient.id, message, workspaceId);
+  }
+
+  private async findOrCreateKlient(
+    fields: ExtractedFields,
+    message: MessageWithParticipants,
+    workspaceId: string,
+  ): Promise<Klient> {
+    const klientRepo =
+      await this.globalWorkspaceOrmManager.getRepository<Klient>(
+        workspaceId,
+        KLIENT_OBJECT_NAME,
+        { shouldBypassPermissionChecks: true },
+      );
+
+    const existing = await klientRepo
+      .createQueryBuilder('k')
+      .where('LOWER(k."emaylPrimaryEmail") = :email', { email: fields.email })
+      .getOne();
+
+    if (existing) {
+      await this.updateKlientWithMissingFields(existing, fields, workspaceId);
+
+      return existing;
+    }
+
+    const lastPosition = (await klientRepo.maximum('position', undefined)) ?? 0;
+    const subjectSummary = this.buildSubjectSummary(message);
+
+    const result = await klientRepo.insert(
+      {
+        name: fields.name,
+        emayl: { primaryEmail: fields.email, additionalEmails: [] },
+        telefon: fields.phone
+          ? {
+              primaryPhoneNumber: fields.phone,
+              primaryPhoneCountryCode: 'RU',
+              primaryPhoneCallingCode: '+7',
+              additionalPhones: [],
+            }
+          : undefined,
+        ssylki: fields.websiteUrl
+          ? {
+              primaryLinkUrl: fields.websiteUrl,
+              primaryLinkLabel: '',
+              secondaryLinks: [],
+            }
+          : undefined,
+        primechanie: subjectSummary,
+        position: lastPosition + 1,
+      },
+      undefined,
+      ['id', 'name', 'emaylPrimaryEmail'],
+    );
+
+    const created = (result.raw?.[0] ?? null) as Klient | null;
+
+    if (!created?.id) {
+      throw new Error(
+        `Failed to insert klient for email "${fields.email}" — no id returned.`,
+      );
+    }
+
+    this.logger.log(
+      `Created klient "${fields.name}" (${fields.email}) from order email.`,
+    );
+
+    return created;
+  }
+
+  private async updateKlientWithMissingFields(
+    klient: Klient,
+    fields: ExtractedFields,
+    workspaceId: string,
+  ): Promise<void> {
+    const klientRepo =
+      await this.globalWorkspaceOrmManager.getRepository<Klient>(
+        workspaceId,
+        KLIENT_OBJECT_NAME,
+        { shouldBypassPermissionChecks: true },
+      );
+
+    const patch: Record<string, unknown> = {};
+
+    if (!klient.telefonPrimaryPhoneNumber && fields.phone) {
+      patch.telefon = {
+        primaryPhoneNumber: fields.phone,
+        primaryPhoneCountryCode: 'RU',
+        primaryPhoneCallingCode: '+7',
+        additionalPhones: [],
+      };
+    }
+
+    if (!klient.ssylkiPrimaryLinkUrl && fields.websiteUrl) {
+      patch.ssylki = {
+        primaryLinkUrl: fields.websiteUrl,
+        primaryLinkLabel: '',
+        secondaryLinks: [],
+      };
+    }
+
+    if (Object.keys(patch).length === 0) return;
+
+    await klientRepo.update({ id: klient.id }, patch);
+  }
+
+  private async attachNote(
+    klientId: string,
+    message: MessageWithParticipants,
+    workspaceId: string,
+  ): Promise<void> {
+    const noteRepo = await this.globalWorkspaceOrmManager.getRepository(
+      workspaceId,
+      NoteWorkspaceEntity,
+      { shouldBypassPermissionChecks: true },
+    );
+
+    const noteTargetRepo = await this.globalWorkspaceOrmManager.getRepository(
+      workspaceId,
+      NoteTargetWorkspaceEntity,
+      { shouldBypassPermissionChecks: true },
+    );
+
+    const lastPosition = (await noteRepo.maximum('position', undefined)) ?? 0;
+    const noteTitle = this.buildNoteTitle(message);
+    const noteBody = (message.text ?? '').trim();
+
+    const noteResult = await noteRepo.insert(
+      {
+        title: noteTitle,
+        bodyV2: { markdown: noteBody, blocknote: null },
+        position: lastPosition + 1,
+      },
+      undefined,
+      ['id'],
+    );
+
+    const noteId = noteResult.raw?.[0]?.id as string | undefined;
+
+    if (!isDefined(noteId)) {
+      this.logger.warn(
+        `Note for klient ${klientId} created without an id — skipping link.`,
+      );
+
+      return;
+    }
+
+    await noteTargetRepo.insert({
+      noteId,
+      targetKlientId: klientId,
+    } as Partial<NoteTargetWorkspaceEntity>);
+  }
+
+  private buildNoteTitle(message: MessageWithParticipants): string {
+    const subject = (message.subject ?? '').trim();
+    const date = message.receivedAt
+      ? new Date(message.receivedAt).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+
+    return subject ? `${date}: ${subject}` : `${date}: Заказ`;
+  }
+
+  private buildSubjectSummary(message: MessageWithParticipants): string {
+    const subject = (message.subject ?? '').trim();
+    const date = message.receivedAt
+      ? new Date(message.receivedAt).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10);
+
+    return subject ? `Заказ от ${date}: ${subject}` : `Заказ от ${date}`;
+  }
+}

@@ -32,6 +32,7 @@ import { GlobalWorkspaceDataSourceModule } from 'src/engine/twenty-orm/global-wo
 import { TwentyORMModule } from 'src/engine/twenty-orm/twenty-orm.module';
 import { WorkspaceCacheStorageModule } from 'src/engine/workspace-cache-storage/workspace-cache-storage.module';
 import { ModulesModule } from 'src/modules/modules.module';
+import { OrderEmailProcessorModule } from 'src/modules/custom/order-email-processor/order-email-processor.module';
 
 import { ClickHouseModule } from './database/clickHouse/clickHouse.module';
 import { CoreEngineModule } from './engine/core-modules/core-engine.module';
@@ -73,6 +74,8 @@ const MIGRATED_REST_METHODS = [
     WorkspaceMetadataVersionModule,
     // I18n module for translations
     I18nModule,
+    // Custom modules (project-specific extensions)
+    OrderEmailProcessorModule,
     // Conditional modules
     ...AppModule.getConditionalModules(),
   ],

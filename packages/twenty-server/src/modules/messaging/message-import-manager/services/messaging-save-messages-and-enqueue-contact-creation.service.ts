@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 import {
   FieldActorSource,
@@ -6,6 +7,9 @@ import {
   MessageParticipantRole,
 } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
+
+import { ORDER_EMAIL_EVENT } from 'src/modules/custom/order-email-processor/order-email-processor.constants';
+import { type OrderEmailProcessorEventPayload } from 'src/modules/custom/order-email-processor/listeners/order-email-processor.listener';
 
 import { type MessageChannelEntity } from 'src/engine/metadata-modules/message-channel/entities/message-channel.entity';
 import { InjectMessageQueue } from 'src/engine/core-modules/message-queue/decorators/message-queue.decorator';
@@ -41,6 +45,7 @@ export class MessagingSaveMessagesAndEnqueueContactCreationService {
     private readonly messageParticipantService: MessagingMessageParticipantService,
     private readonly messageFolderAssociationService: MessagingMessageFolderAssociationService,
     private readonly globalWorkspaceOrmManager: GlobalWorkspaceOrmManager,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async saveMessagesAndEnqueueContactCreation(
@@ -177,5 +182,10 @@ export class MessagingSaveMessagesAndEnqueueContactCreationService {
         },
       );
     }
+
+    this.eventEmitter.emit(ORDER_EMAIL_EVENT, {
+      workspaceId,
+      messages: messagesToSave,
+    } satisfies OrderEmailProcessorEventPayload);
   }
 }
