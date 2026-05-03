@@ -6,6 +6,7 @@ import * as z from 'zod';
 import { type VersionInfoDTO } from 'src/engine/core-modules/admin-panel/dtos/version-info.dto';
 import { SecureHttpClientService } from 'src/engine/core-modules/secure-http-client/secure-http-client.service';
 import { TwentyConfigService } from 'src/engine/core-modules/twenty-config/twenty-config.service';
+import { TWENTY_CURRENT_VERSION } from 'src/engine/core-modules/upgrade/constants/twenty-current-version.constant';
 
 @Injectable()
 export class AdminPanelVersionService {
@@ -15,7 +16,8 @@ export class AdminPanelVersionService {
   ) {}
 
   async getVersionInfo(): Promise<VersionInfoDTO> {
-    const currentVersion = this.twentyConfigService.get('APP_VERSION');
+    const currentVersion =
+      this.twentyConfigService.get('APP_VERSION') ?? TWENTY_CURRENT_VERSION;
 
     try {
       const httpClient = this.secureHttpClientService.getHttpClient();
