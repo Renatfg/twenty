@@ -16,14 +16,45 @@ import { type MessageWithParticipants } from 'src/modules/messaging/message-impo
 import { NoteWorkspaceEntity } from 'src/modules/note/standard-objects/note.workspace-entity';
 import { NoteTargetWorkspaceEntity } from 'src/modules/note/standard-objects/note-target.workspace-entity';
 
+// Composite fields are written as nested objects; flat columns are what
+// Postgres actually stores and what we read back via explicit select.
 type Klient = {
   id: string;
   name: string | null;
+  position: number;
+  primechanie: string | null;
   emaylPrimaryEmail: string | null;
   telefonPrimaryPhoneNumber: string | null;
   ssylkiPrimaryLinkUrl: string | null;
-  primechanie: string | null;
+  emayl?: {
+    primaryEmail: string;
+    additionalEmails: string[];
+  };
+  telefon?: {
+    primaryPhoneNumber: string;
+    primaryPhoneCountryCode: string;
+    primaryPhoneCallingCode: string;
+    additionalPhones: string[];
+  };
+  ssylki?: {
+    primaryLinkUrl: string;
+    primaryLinkLabel: string;
+    secondaryLinks: string[];
+  };
 };
+
+// Without an explicit select, TypeORM hydrates composite fields as nested
+// objects and skips the flat *_PrimaryEmail / *_PrimaryPhoneNumber columns,
+// so our "fill-only-if-empty" checks would always see undefined.
+const KLIENT_SELECT_COLUMNS = [
+  'k.id',
+  'k.name',
+  'k.position',
+  'k.primechanie',
+  'k."emaylPrimaryEmail"',
+  'k."telefonPrimaryPhoneNumber"',
+  'k."ssylkiPrimaryLinkUrl"',
+];
 
 type ExtractedFields = {
   email: string;
@@ -114,6 +145,7 @@ export class OrderEmailProcessorService {
 
     const existing = await klientRepo
       .createQueryBuilder('k')
+      .select(KLIENT_SELECT_COLUMNS)
       .where('LOWER(k."emaylPrimaryEmail") = :email', { email: fields.email })
       .getOne();
 
