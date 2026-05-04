@@ -16,16 +16,13 @@ import { type MessageWithParticipants } from 'src/modules/messaging/message-impo
 import { NoteWorkspaceEntity } from 'src/modules/note/standard-objects/note.workspace-entity';
 import { NoteTargetWorkspaceEntity } from 'src/modules/note/standard-objects/note-target.workspace-entity';
 
-// Composite fields are written as nested objects; flat columns are what
-// Postgres actually stores and what we read back via explicit select.
+// Twenty WorkspaceRepository hydrates composite fields (EMAILS/PHONES/LINKS)
+// as nested objects on the way out — flat columns are NOT in the result.
 type Klient = {
   id: string;
   name: string | null;
   position: number;
   primechanie: string | null;
-  emaylPrimaryEmail: string | null;
-  telefonPrimaryPhoneNumber: string | null;
-  ssylkiPrimaryLinkUrl: string | null;
   emayl?: {
     primaryEmail: string;
     additionalEmails: string[];
@@ -42,19 +39,6 @@ type Klient = {
     secondaryLinks: string[];
   };
 };
-
-// Without an explicit select, TypeORM hydrates composite fields as nested
-// objects and skips the flat *_PrimaryEmail / *_PrimaryPhoneNumber columns,
-// so our "fill-only-if-empty" checks would always see undefined.
-const KLIENT_SELECT_COLUMNS = [
-  'k.id',
-  'k.name',
-  'k.position',
-  'k.primechanie',
-  'k."emaylPrimaryEmail"',
-  'k."telefonPrimaryPhoneNumber"',
-  'k."ssylkiPrimaryLinkUrl"',
-];
 
 type ExtractedFields = {
   email: string;
@@ -145,7 +129,6 @@ export class OrderEmailProcessorService {
 
     const existing = await klientRepo
       .createQueryBuilder('k')
-      .select(KLIENT_SELECT_COLUMNS)
       .where('LOWER(k."emaylPrimaryEmail") = :email', { email: fields.email })
       .getOne();
 
@@ -213,7 +196,13 @@ export class OrderEmailProcessorService {
 
     const patch: Record<string, unknown> = {};
 
-    if (!klient.telefonPrimaryPhoneNumber && fields.phone) {
+    // Twenty WorkspaceRepository hydrates composite fields as nested objects
+    // (e.g. klient.telefon.primaryPhoneNumber). Flat columns from .select()
+    // are still reformatted on the way out, so we must read nested.
+    const currentPhone = klient.telefon?.primaryPhoneNumber;
+    const currentSite = klient.ssylki?.primaryLinkUrl;
+
+    if (!currentPhone && fields.phone) {
       patch.telefon = {
         primaryPhoneNumber: fields.phone,
         primaryPhoneCountryCode: 'RU',
@@ -222,7 +211,7 @@ export class OrderEmailProcessorService {
       };
     }
 
-    if (!klient.ssylkiPrimaryLinkUrl && fields.websiteUrl) {
+    if (!currentSite && fields.websiteUrl) {
       patch.ssylki = {
         primaryLinkUrl: fields.websiteUrl,
         primaryLinkLabel: '',
