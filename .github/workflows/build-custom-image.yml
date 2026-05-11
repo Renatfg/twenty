@@ -33,6 +33,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Lowercase owner
+        id: owner
+        run: echo "name=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -42,8 +46,8 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/twenty:${{ inputs.tag || 'custom' }}
-            ghcr.io/${{ github.repository_owner }}/twenty:custom-${{ github.sha }}
+            ghcr.io/${{ steps.owner.outputs.name }}/twenty:${{ inputs.tag || 'custom' }}
+            ghcr.io/${{ steps.owner.outputs.name }}/twenty:custom-${{ github.sha }}
           build-args: |
             APP_VERSION=v2.3.0-custom
           cache-from: type=gha
