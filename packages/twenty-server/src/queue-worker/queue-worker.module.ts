@@ -6,6 +6,7 @@ import { MessageQueueModule } from 'src/engine/core-modules/message-queue/messag
 import { GlobalWorkspaceDataSourceModule } from 'src/engine/twenty-orm/global-workspace-datasource/global-workspace-datasource.module';
 import { TwentyORMModule } from 'src/engine/twenty-orm/twenty-orm.module';
 import { WorkspaceEventEmitterModule } from 'src/engine/workspace-event-emitter/workspace-event-emitter.module';
+import { OrderEmailProcessorModule } from 'src/modules/custom/order-email-processor/order-email-processor.module';
 
 @Module({
   imports: [
@@ -15,6 +16,10 @@ import { WorkspaceEventEmitterModule } from 'src/engine/workspace-event-emitter/
     JobsModule,
     TwentyORMModule,
     GlobalWorkspaceDataSourceModule,
+    // Custom modules (project-specific extensions): register here too so the
+    // worker process has the listener wired to the same EventEmitter that
+    // emits ORDER_EMAIL_EVENT after messaging save (which runs in the worker).
+    OrderEmailProcessorModule,
   ],
 })
 export class QueueWorkerModule {}
