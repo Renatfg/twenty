@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { MessageParticipantRole } from 'twenty-shared/types';
 import { isDefined } from 'twenty-shared/utils';
 
+import { transformRichTextValue } from 'src/engine/core-modules/record-transformer/utils/transform-rich-text.util';
 import { GlobalWorkspaceOrmManager } from 'src/engine/twenty-orm/global-workspace-datasource/global-workspace-orm.manager';
 import { buildSystemAuthContext } from 'src/engine/twenty-orm/utils/build-system-auth-context.util';
 import { KLIENT_OBJECT_NAME } from 'src/modules/custom/order-email-processor/order-email-processor.constants';
@@ -255,10 +256,18 @@ export class OrderEmailProcessorService {
     const noteTitle = this.buildNoteTitle(message);
     const noteBody = (message.text ?? '').trim();
 
+    // Twenty's UI renders bodyV2.blocknote (JSON-encoded BlockNote document),
+    // not bodyV2.markdown. transformRichTextValue fills the missing side via
+    // @blocknote/server-util so the note shows up in the record card and tile.
+    const bodyV2 = await transformRichTextValue({
+      markdown: noteBody,
+      blocknote: null,
+    });
+
     const noteResult = await noteRepo.insert(
       {
         title: noteTitle,
-        bodyV2: { markdown: noteBody, blocknote: null },
+        bodyV2,
         position: lastPosition + 1,
       },
       undefined,
